@@ -1,0 +1,280 @@
+---
+title: "assemble_gwas"
+author: "Pietro Demela"
+date: "22/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+### Libraries
+
+```{r libraries, }
+library(data.table)
+library(dplyr)
+```
+
+## Functions to assemble the chunks
+### assemble_f
+This function takes the path and name of the chunks and returns a summary stats for each of the three factors.
+The number of factors must be specified. 
+
+```{r assemble_f, message=TRUE, warning=TRUE, paged.print=TRUE}
+assemble_f <- function(n_expected_chunks, first_part_of_path, terminal_part_of_path, n_factors ){
+  
+  
+  n_expected_chunks <- c(n_expected_chunks)
+  
+  #check if files exist and return the one that do not exist
+  chunks_found <- lapply(c(n_expected_chunks), function(x)file.exists(paste0(first_part_of_path, x, terminal_part_of_path)))
+  missing_chunks <- c(n_expected_chunks)[unlist(chunks_found)==F]
+  
+  #issue a warning indicating which chunks are missing and that will not be included in the final sumstats
+  if((length(missing_chunks))>0) { 
+    
+    warning(    paste0('SOME CHUNKS ARE MISSING!', '\n',
+                       length(n_expected_chunks) - length(missing_chunks), ' chunks were found!', '\n',
+                       length(missing_chunks), ' chunks were NOT found!', '\n',
+                       'The missing chunks are the ', paste0(missing_chunks, collapse = ' - ') , '\n', 
+                       '\n')
+    )
+    
+  } else {
+    
+    cat(paste0( length(chunks_found) , ' chunks were found!', '\n', 
+                'There are not missing chunks :) ','\n' ,
+                '\n' ))
+  }
+  
+  
+  #load the chunks that have been found
+  chunks_to_load <-  c(n_expected_chunks)[unlist(chunks_found)==T]
+  
+  chunks <- lapply( chunks_to_load , function(x)readRDS(paste0(first_part_of_path, x, terminal_part_of_path )))
+  
+  cat(paste0('I have loaded ' , length(chunks), ' chunks!', '\n'))
+  
+  #for each chunk, separate the factors and merge the chunk for each factor
+  #allocate the list
+  ordered <- list()
+  sum_stats <- list()
+  
+  #cycle through each of the factors (n_factors)
+  for(k in c(1:n_factors)) {
+    
+    #allocate a list in the k element of ordered according to the number of factors
+    ordered[[k]] <- list()
+    #separate the Factors in the ordered list
+    for(i in (1:length(chunks))){
+      ordered[[k]][[i]] <- chunks[[i]][[k]]
+    }
+    
+    #merge the chunks for each facotr, put into a list a name the element of the list
+    sum_stats[[k]] <-  do.call(rbind, ordered[[k]]) 
+    names(sum_stats)[k] <- paste0('factor', k)
+    
+    #issue a warning if the number of unique SNP is less then the number of rows
+    if( length(unique(sum_stats[[k]]$SNP))!= nrow(sum_stats[[k]]) ){warning('The number of unique SNP is different than the number of rows in F',k ,'!!!' )}
+    
+    #issue a warning if the cumulative numnber of unique SNPs in the merged dataset is different from the sum of the individual unique SNPs per chunk
+    if( nrow(sum_stats[[k]]) != sum(unlist(lapply(ordered[[k]], nrow)))  )  warning('The number of unique SNP is different between the merged and the sum of the individual chunks in F',k,  '!!!')
+    
+  }
+  
+  #calculate some useful qc information
+  SNPs_unique <- list()
+  SNP_error <- list()
+  
+  qc_info <- for( i in (1:length(sum_stats))){
+    
+    #number of SNP in total without error
+    SNPs_unique[[i]]  <- cat(paste0('The number of unique SNPs in F',i, ' is ', length(unique(sum_stats[[i]]$SNP)), '\n'))
+    
+    #operator found
+    cat('The lhs operators found in F',i, ' are ',  unique(sum_stats[[i]]$lhs), '\n')
+    
+    #number of SNP not estimated
+    SNP_error[[i]] <-  cat(paste0('The number of not estimated SNPs in F', i , ' is ', nrow(sum_stats[[i]][sum_stats[[i]]$error != 0,]), '\n' , 
+                                  '\n'))
+    
+  }
+  
+  
+  invisible(sum_stats)
+}
+```
+
+
+### append_chunk
+
+This function takes several outputs (as a list) of the aseemble_3f function and puts them together.
+
+```{r append_chunk, message=TRUE, warning=TRUE}
+append_chunk <- function(list_complete, n_factors ){
+  
+  #allocate list
+  ordered <- list()
+  sum_stats <- list()
+  
+  #cycle through each of the factors (n_factors)
+  for(k in c(1:n_factors)) {
+    
+    #allocate a list in the k element of ordered according to the number of factors
+    ordered[[k]] <- list()
+    #separate the Factors in the ordered list
+    for(i in (1:length(list_complete))){
+      ordered[[k]][[i]] <- list_complete[[i]][[k]]
+    }
+    
+    #merge the chunks for each facotr, put into a list a name the element of the list
+    sum_stats[[k]] <-  do.call(rbind, ordered[[k]])
+    names(sum_stats)[k] <- paste0('factor', k)
+    
+    #issue a warning if the number of unique SNP is less then the number of rows
+    if( length(unique(sum_stats[[k]]$SNP))!= nrow(sum_stats[[k]]) ){warning('The number of unique SNP is different than the number of rows in F',k ,'!!!' )}
+    
+    #issue a warning if the cumulative numnber of unique SNPs in the merged dataset is different from the sum of the individual unique SNPs per chunk
+    if( nrow(sum_stats[[k]]) != sum(unlist(lapply(ordered[[k]], nrow)))  )  warning('The number of unique SNP is different between the merged and the sum of the individual chunks in F',k,  '!!!')
+    
+  }
+  
+  #calculate some useful qc information
+  SNPs_unique <- list()
+  SNP_error <- list()
+  
+  for( i in (1:length(sum_stats))){
+    
+    #number of SNP in total without error
+    SNPs_unique[[i]]  <- cat(paste0('The number of unique SNPs in F',i, ' is ', length(unique(sum_stats[[i]]$SNP)), '\n'))
+    
+    #operator found
+    cat('The lhs operators found in F',i, ' are ',  unique(sum_stats[[i]]$lhs), '\n')
+    
+    #number of SNP not estimated
+    SNP_error[[i]] <-  cat(paste0('The number of not estimated SNPs in F',i, ' is ', nrow(sum_stats[[i]][sum_stats[[i]]$error != 0,]), '\n' , 
+                                  '\n'))
+    
+  }
+  
+  
+  invisible(sum_stats)
+  
+}
+
+
+```
+
+## Assemble the chuncks
+
+There are 506 chunks in the folder.
+```{r assemble gwas, message=TRUE, warning=TRUE, paged.print=FALSE}
+
+chunks_1_506<- assemble_f(1:506, 'outputs/rev_1/03_gwas_estimation/chunks/', '_gwas_rev_1.RDS' , 3)
+
+```
+
+### Add the missing chunks
+
+```{r missing chunks, echo=TRUE, message=TRUE, warning=TRUE, paged.print=FALSE}
+
+chunk_100 <- assemble_f(1:10, 'outputs/rev_1/03_gwas_estimation/chunk_100/100_','_gwas_rev1.RDS', 3 )
+chunk_194 <- assemble_f(1:10, 'outputs/rev_1/03_gwas_estimation/chunk_194/194_','_gwas_rev1.RDS', 3 )
+chunk_251 <- assemble_f(1:10, 'outputs/rev_1/03_gwas_estimation/chunk_251/251_','_gwas_rev1.RDS', 3 )
+chunk_353 <- assemble_f(1:10, 'outputs/rev_1/03_gwas_estimation/chunk_353/353_','_gwas_rev1.RDS', 3 )
+chunk_474 <- assemble_f(1:10, 'outputs/rev_1/03_gwas_estimation/chunk_473/473_','_gwas_rev1.RDS', 3 )
+
+```
+
+### combine everything 
+
+```{r}
+#put all the chunks together and save the output 
+all_chunks <- append_chunk(list(chunks_1_506, chunk_100, chunk_194, chunk_251, chunk_353, chunk_474), 3) 
+
+#save the RDS assembled
+saveRDS(all_chunks, 'outputs/rev_1/03_gwas_estimation/all_chunks_rev1.RDS')
+
+```
+
+### Separate and save the gwas results
+
+Save only the SNPs that were estimated and remove the ones that did not converged or had an error/warning.
+
+```{r message=TRUE, warning=TRUE, paged.print=FALSE}
+F1 <- all_chunks$factor1 #Fgut
+F2 <- all_chunks$factor2 #Faid
+F3 <- all_chunks$factor3 #Falrg
+
+#remove NA and errors/warnings from F1
+F1_noNA <- F1[(which(!is.na(F1$Pval_Estimate))),]
+dim(F1_noNA)
+#are the any errors/warnings?
+table(F1_noNA$error)
+table(F1_noNA$warning)
+#check factor
+table(F1_noNA$lhs)
+
+#remove NA and errors/warnings from F2
+F2_noNA <- F2[(which(!is.na(F2$Pval_Estimate))),]
+dim(F2_noNA)
+#are the any errors/warnings?
+table(F2_noNA$error)
+table(F2_noNA$warning)
+#check factor
+table(F2_noNA$lhs)
+
+
+#remove NA and errors/warnings from F3
+F3_noNA <- F3[(which(!is.na(F3$Pval_Estimate))),]
+dim(F3_noNA)
+#are the any errors/warnings?
+table(F3_noNA$error)
+table(F3_noNA$warning)
+#check factor
+table(F3_noNA$lhs)
+
+
+#save 
+
+#save the factor gwas individually for fuma 
+for( i in c(1:length( list(F1_noNA, F2_noNA, F3_noNA)))){
+  to_save <- list(F1_noNA, F2_noNA, F3_noNA)[[i]]
+  to_save <- to_save[,c('SNP', 'CHR', 'BP', 'A1', 'A2', 'est', 'SE', 'Pval_Estimate')]
+  to_save <- dplyr::rename(to_save, Beta ='est', P = 'Pval_Estimate')
+  fwrite(to_save, paste0('outputs/rev_1/03_gwas_estimation/summarystats_f',i,'_.txt'), 
+         col.names = T, row.names = F, sep = '\t', quote = F)
+  rm(to_save)
+}
+
+
+```
+
+### Calculate the sample size of factors.
+
+```{r sample size factos, message=TRUE, warning=TRUE, paged.print=TRUE}
+#restrict to MAF of 40% and 10%
+N_hat <- vector()
+for( i in c(1:length( list(F1_noNA, F2_noNA, F3_noNA)))){
+  to_use <- list(F1_noNA, F2_noNA, F3_noNA)[[i]]
+  maf_filtered <-subset(to_use , to_use$MAF <= .4 & to_use$MAF >= .1)
+  N_hat[i]<-mean(1/((2*to_use$MAF*(1-to_use$MAF))*to_use$SE^2))
+  names(N_hat)[i] <- paste0('N_hat F', i)
+}
+
+N_hat
+```
+
+
+
+
+
+
+

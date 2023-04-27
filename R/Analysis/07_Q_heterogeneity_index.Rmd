@@ -1,0 +1,272 @@
+---
+title: "07 Q heterogeneity index"
+author: "Pietro Demela"
+date: "10/01/2023"
+output: html_document
+---
+In order to evaluate whether the calculated SNP effects were acting through our three factor model, we performed the QSNP heterogeneity tests. The heterogeneity test returns a 𝜒2, whose null hypothesis suggests that the SNP is acting through the specified model. Therefore, rejecting the null hypothesis means that the SNP acts through a model that is different from the specified one.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+## Libraries
+
+```{r message=FALSE, warning=TRUE}
+library(GenomicSEM)
+library(data.table)
+library(ggplot2)
+```
+
+## Load datasets
+
+```{r}
+aid_sumstats <- fread('outputs/rev_1/02_munge_ldsc_sumstats/aid_sumstats.txt', data.table = F)
+ldsc_model <- readRDS('outputs/rev_1/02_munge_ldsc_sumstats/ldsc_output_rev1.RDS')
+factor_loci <-fread('outputs/rev_1/04_genomic_regions_factors/regions_factors.txt', data.table = F)
+
+```
+
+## Independet models estimation 
+
+The independentcy is tested for the lead SNP of each significant genomic region. The lead SNP is the column 'SNP' in the factor_loci table. 
+```{r}
+loci_snps  <- aid_sumstats[which(aid_sumstats$SNP %in% factor_loci$SNP),]
+```
+
+
+### Model specification
+
+One model per factor
+
+```{r}
+aid_model_f1 <- 'F1 =~ NA*crohn + uc  + psc  
+F2 =~ NA*jia + sle + ra+ t1d 
+F3 =~ NA*asthma+ derma 
+
+F1~~F2
+F1~~F3
+F2~~F3
+F1 ~~ 1*F1
+F2 ~~ 1*F2
+F3 ~~ 1*F3
+
+
+
+F2 ~ SNP
+F3 ~ SNP
+
+crohn + uc  + psc ~ SNP
+
+
+crohn~~a*crohn
+uc~~b*uc
+psc~~c*psc
+jia~~d*jia
+sle~~e*sle
+ra~~f*ra
+t1d~~g*t1d
+asthma~~h*asthma
+derma~~i*derma
+
+a>0.001
+b>0.001
+c>0.001
+d>0.001
+e>0.001
+f>0.001
+g>0.001
+h>0.001
+i>0.001
+'
+
+
+aid_model_f2 <- 'F1 =~ NA*crohn + uc  + psc  
+F2 =~ NA*jia + sle + ra+ t1d 
+F3 =~ NA*asthma+ derma 
+
+F1~~F2
+F1~~F3
+F2~~F3
+F1 ~~ 1*F1
+F2 ~~ 1*F2
+F3 ~~ 1*F3
+
+
+
+F1 ~ SNP
+F3 ~ SNP
+
+jia + sle + ra+ t1d ~ SNP
+
+crohn~~a*crohn
+uc~~b*uc
+psc~~c*psc
+jia~~d*jia
+sle~~e*sle
+ra~~f*ra
+t1d~~g*t1d
+asthma~~h*asthma
+derma~~i*derma
+
+a>0.001
+b>0.001
+c>0.001
+d>0.001
+e>0.001
+f>0.001
+g>0.001
+h>0.001
+i>0.001'
+
+
+aid_model_f3 <- 'F1 =~ NA*crohn + uc  + psc  
+F2 =~ NA*jia + sle + ra+ t1d 
+F3 =~ NA*asthma+ derma 
+
+F1~~F2
+F1~~F3
+F2~~F3
+F1 ~~ 1*F1
+F2 ~~ 1*F2
+F3 ~~ 1*F3
+
+
+
+F1 ~ SNP
+F2 ~ SNP
+
+asthma + derma~ SNP
+
+crohn~~a*crohn
+uc~~b*uc
+psc~~c*psc
+jia~~d*jia
+sle~~e*sle
+ra~~f*ra
+t1d~~g*t1d
+asthma~~h*asthma
+derma~~i*derma
+
+a>0.001
+b>0.001
+c>0.001
+d>0.001
+e>0.001
+f>0.001
+g>0.001
+h>0.001
+i>0.001'
+```
+
+### Estimation of independet models
+
+It takes ~1 hour.  
+
+```{r}
+output <- list()
+
+for(i in 1:3){
+  tt <-  c('f1', 'f2', 'f3')[i]
+  output[[tt]] <- userGWAS(covstruc = ldsc_model, 
+                           SNPs = loci_snps, 
+                           model = c(aid_model_f1, aid_model_f2, aid_model_f3)[i], 
+                           sub=c('F1~~F2'), #the CHi square is the same for every 
+                           parallel = T,cores = 2 )
+}
+
+saveRDS(output, 'outputs/rev_1/07_Qheterogeneity/output_model_estimation.RDS')
+
+```
+### Load factors summary statistics
+
+```{r message=TRUE, warning=TRUE, paged.print=TRUE}
+#load q het
+q_ind <- readRDS('outputs/rev_1/07_Qheterogeneity/output_model_estimation.RDS')
+
+
+#load factor summary stats
+fac <- readRDS('outputs/rev_1/03_gwas_estimation/all_chunks_rev1.RDS')
+
+
+#allocate the column of Q pvalue
+factor_loci$Q_chisq_pval <- rep(NA, nrow(factor_loci))
+
+```
+
+### Calculate the Q pvalue 
+
+Subtract the Chisquare of the independent model from the Chisquare of the primary model. Do the same for the degrees of freedom and calculate the pvalue of the resulting Chisquare. 
+
+```{r}
+#loop for each of the three factors
+for(i in 1:3){
+  
+      #select the factor
+      tt <- c('f1', 'f2', 'f3')[i]
+      q_act <- q_ind[[tt]][[1]]
+      #select the lead SNPs in heterogeneity sumstats for that factor
+      q_act_2 <- q_act[which(q_act$SNP %in% factor_loci[which(factor_loci$trait==tt),]$SNP),]
+      #select the lead SNPs in summary stats for that factor
+      gwas <- fac[[1]][which(fac[[1]]$SNP %in% q_act_2$SNP), ]
+      
+      #put all of them in the same order
+      gwas_2 <- gwas[match(q_act_2$SNP, gwas$SNP),]
+      
+      #substract the Chisquare
+      Q <- gwas_2$chisq - q_act_2$chisq
+      df <- gwas_2$chisq_df - q_act_2$chisq_df
+      
+      #put all of them in the same order
+      factor_loci[which(factor_loci$trait==tt),][match(q_act_2$SNP, factor_loci[which(factor_loci$trait==tt),]$SNP, nomatch = NA),]$Q_chisq_pval<- pchisq(Q,df,lower.tail=FALSE)
+      print(table(pchisq(Q,df,lower.tail=FALSE)<5e-8))
+    
+  }
+
+#add a column stating wheter the Q pval is significant (TRUE)
+factor_loci$het<- ifelse(factor_loci$Q_chisq_pval<5e-8, TRUE, FALSE)
+
+#save
+fwrite(factor_loci, 'outputs/rev_1/07_Qheterogeneity/genomic_regions_table_heterogeneity_column.txt', sep = '\t', col.names = T)
+
+```
+
+
+### Plot
+
+```{r}
+
+#save
+pdf('outputs/rev_1/07_Qheterogeneity/heterogeneity_index_genomic_regions.pdf', width = 10, height = 10)
+ggplot(data=factor_loci, aes(x=trait, fill=het) ) +
+  geom_bar(stat='count',position = position_stack(reverse=T),  color='black')+
+  scale_fill_manual(values = c("grey80", "white")) +
+  geom_text(aes(label = paste0("n=", ..count..)),position= position_stack(vjust = 0.5, reverse=T),stat='count')+
+  labs(y = 'Number of genomic regions', x = '')+
+  theme_classic() +
+  theme(legend.position="bottom") + ggtitle('Q heterogeneoity index lead SNPs genomic regions')
+dev.off()
+
+#plot
+ggplot(data=factor_loci, aes(x=trait, fill=het) ) +
+  geom_bar(stat='count',position = position_stack(reverse=T),  color='black')+
+  scale_fill_manual(values = c("grey80", "white")) +
+  geom_text(aes(label = paste0("n=", ..count..)),position= position_stack(vjust = 0.5, reverse=T),stat='count')+
+  labs(y = 'Number of genomic regions', x = '')+
+  theme_classic() +
+  theme(legend.position="bottom") + ggtitle('Q heterogeneoity index lead SNPs genomic regions')
+
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
+

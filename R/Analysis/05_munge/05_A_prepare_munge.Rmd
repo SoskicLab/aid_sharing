@@ -1,0 +1,150 @@
+---
+title: "05_A_prepare_munge"
+author: "Pietro Demela"
+date: "09/01/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+```{r libraries}
+library(data.table)
+library(dplyr)
+library(tidyr)
+```
+
+### Prepare munge function
+
+Function to rename the columns A1 is the effect allele and A2 is the non effect allele. 
+
+```{r, prepre munge function}
+prepare_munge <- function(sum_stats, rsID, the_effect_allele, the_non_effect_allele, pvalue, the_OR=NA, the_Beta=NA, the_SE=NA, the_chr=NA, the_bp=NA, to_remove=NA, path = NA){
+  #an error if arguments are not provided
+  if (missing(sum_stats) | missing(rsID) | missing(the_effect_allele) | missing(the_non_effect_allele) |missing(pvalue) ) {
+    
+    stop( 'At least one argument is missing')
+    
+  } else {
+    
+    require(dplyr)
+    require(data.table)
+    sum_stats <- sum_stats  %>% rename(c(SNP = all_of(rsID), EFFECT_ALLELE  = all_of(the_effect_allele), OTHER_ALLELE = all_of(the_non_effect_allele), p = all_of(pvalue) ))
+    sum_stats$SNP <- tolower(sum_stats$SNP)
+    sum_stats$p <- as.numeric(sum_stats$p)
+    sum_stats$EFFECT_ALLELE <- toupper(as.character( sum_stats$EFFECT_ALLELE))
+    sum_stats$OTHER_ALLELE <- toupper(as.character( sum_stats$OTHER_ALLELE))
+    
+    #conditional options
+    #remove columns
+    if(!is.na(to_remove[1])){sum_stats <- select(sum_stats,-(all_of(to_remove)))}
+    
+    #rename SE column
+    if(!is.na(the_SE)){
+      sum_stats <- rename(sum_stats, SE=all_of(the_SE))
+      sum_stats$SE <- as.numeric(sum_stats$SE)
+    }
+    
+    #rename the effect column
+    if(!is.na(the_OR)){
+      sum_stats <- rename(sum_stats, OR=all_of(the_OR))
+      sum_stats$OR <- as.numeric(sum_stats$OR)
+    }
+    
+    if (!is.na(the_Beta)){
+      sum_stats <- rename(sum_stats, Beta=all_of(the_Beta))
+      sum_stats$Beta <- as.numeric(sum_stats$Beta)
+    }
+    
+    if(is.na(the_OR) & is.na(the_Beta) ) {stop('Effect column not specified ')}
+    
+    
+    #rename the CHR column
+    if(!is.na(the_chr)){ sum_stats <-  rename(sum_stats, CHR=all_of(the_chr))}
+    
+    #rename the BP column
+    if(!is.na(the_bp)){ sum_stats <- rename(sum_stats, BP=all_of(the_bp))}
+    
+    #save the file if a path is provided
+    if(is.na(path)){
+      invisible(sum_stats)
+      
+      
+    } else {
+      
+      fwrite(sum_stats, path, sep = '\t', col.names = T, row.names = F, quote = F)
+      invisible(sum_stats)
+    }
+  }
+}
+
+```
+
+
+## Apply function to factor summary statistics
+
+```{r message=TRUE, warning=TRUE, paged.print=FALSE}
+f1 <- fread('outputs/rev_1/03_gwas_estimation/summarystats_f1_.txt', data.table = F)
+head(f1)
+
+f1 <- prepare_munge(f1,
+                    rsID = 'SNP',
+                    the_effect_allele = 'A1',
+                    the_non_effect_allele = 'A2',
+                    pvalue = 'P',
+                    the_Beta = 'Beta',
+                    the_SE = 'SE',
+                    the_chr = 'CHR',
+                    path = 'outputs/rev_1/05_munge/ready_munge/f1_ready_for_munge.txt'
+)
+
+head(f1)
+
+```
+
+
+```{r message=TRUE, warning=TRUE, paged.print=FALSE}
+f2 <- fread('outputs/rev_1/03_gwas_estimation/summarystats_f2_.txt', data.table = F)
+head(f2)
+
+f2 <- prepare_munge(f2,
+                    rsID = 'SNP',
+                    the_effect_allele = 'A1',
+                    the_non_effect_allele = 'A2',
+                    pvalue = 'P',
+                    the_Beta = 'Beta',
+                    the_SE = 'SE',
+                    path = 'outputs/rev_1/05_munge/ready_munge/f2_ready_for_munge.txt'
+)
+head(f2)
+```
+
+
+```{r message=TRUE, warning=TRUE, paged.print=FALSE}
+f3 <- fread('outputs/rev_1/03_gwas_estimation/summarystats_f3_.txt', data.table = F)
+head(f3)
+
+f3 <- prepare_munge(f3,
+                    rsID = 'SNP',
+                    the_effect_allele = 'A1',
+                    the_non_effect_allele = 'A2',
+                    pvalue = 'P',
+                    the_Beta = 'Beta',
+                    the_SE = 'SE',
+                    path = 'outputs/rev_1/05_munge/ready_munge/f3_ready_for_munge.txt'
+)
+head(f3)
+```
+
+
+```{r}
+sessionInfo()
+```
+
+

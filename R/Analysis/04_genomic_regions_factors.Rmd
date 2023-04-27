@@ -1,0 +1,425 @@
+---
+title: "Genomic regions factors"
+author: "Pietro Demela"
+date: "10/01/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+## Libraries
+
+```{r}
+library(data.table)
+library(stringr)
+library(GenomicRanges)
+library(dplyr)
+library(ChIPpeakAnno)
+library(RColorBrewer)
+library(ComplexHeatmap)
+
+```
+
+
+## locus.breaker function
+
+This function identifies significant genomic regions.
+We define the boundaries of each significant genomic region by identifying all the SNPs with a p-value lower than 1×10-6. We calculated the distance among each consecutive SNPs below
+this threshold in the same chromosome; if two SNPs were further than 250 kb apart, thenthey were defined as belonging to two different genomic regions. We then considered as 
+‘significant’ all the genomic regions where at least one SNP had a p-value < 5×10-8. 
+
+```{r}
+locus.breaker=function(res,p.sig=5e-8, p.limit=1e-5,hole.size=250000
+                       ,p.label="p",chr.label="chr",pos.label="pos"){
+  
+  res = res[order(as.numeric(res[, chr.label]), as.numeric(res[,pos.label])),]
+  
+  res=res[which(res[,p.label]<p.limit),]
+  trait.res=c()
+  for(j in 1:22){
+    
+    res.chr=res[which(res[,chr.label]==j),]
+    if(nrow(res.chr)>1){
+      holes=res.chr[,pos.label][-1]-res.chr[,pos.label][-length(res.chr[,pos.label])] 
+      gaps=which(holes>hole.size)
+      if(length(gaps)>0){
+        for(k in 1:(length(gaps)+1)){
+          
+          if(k==1){
+            res.loc=res.chr[1:(gaps[k]),]  
+          }else if(k==(length(gaps)+1)){
+            res.loc=res.chr[(gaps[k-1]+1):nrow(res.chr),]  
+          }else{
+            res.loc=res.chr[(gaps[k-1]+1):(gaps[k]),]
+          }
+          if(min(res.loc[,p.label])<p.sig){
+            
+            start.pos=min(res.loc[,pos.label],na.rm=T)
+            end.pos=max(res.loc[,pos.label],na.rm=T)
+            chr=j
+            best.snp=res.loc[which.min(res.loc[,p.label]),]
+            line.res=c(chr,start.pos,end.pos,unlist(best.snp))
+            trait.res=rbind(trait.res,line.res)
+          }
+          
+          
+        }
+      }else{
+        res.loc=res.chr
+        if(min(res.loc[,p.label])<p.sig)  {
+          
+          start.pos=min(res.loc[,pos.label],na.rm=T)
+          end.pos=max(res.loc[,pos.label],na.rm=T)
+          chr=j
+          best.snp=res.loc[which.min(res.loc[,p.label]),]
+          line.res=c(chr,start.pos,end.pos,unlist(best.snp))
+          trait.res=rbind(trait.res,line.res)
+        }
+        
+      }
+      
+    }else if(nrow(res.chr)==1){
+      
+      res.loc=res.chr
+      if(min(res.loc[,p.label])<p.sig){
+        start.pos=min(res.loc[,pos.label],na.rm=T)
+        end.pos=max(res.loc[,pos.label],na.rm=T)
+        chr=j
+        best.snp=res.loc[which.min(res.loc[,p.label]),]
+        line.res=c(chr,start.pos,end.pos,unlist(best.snp))
+        trait.res=rbind(trait.res,line.res)
+      }
+      
+      
+    }
+  }
+  
+  print(trait.res)
+  trait.res=as.data.frame(trait.res,stringsAsFactors=FALSE)
+  trait.res=trait.res[,-(which(names(trait.res)==chr.label))]
+  names(trait.res)[1:3]=c("chr","start","end")
+  trait.res
+}
+
+```
+
+## run locus.breaker on the factors.
+
+```{r}
+sstats <- list()
+regions <- list()
+for(i in c('f1', 'f2', 'f3')){
+  
+  #load the summary statistics of each factor
+  sstats[[i]]<- fread(paste0('outputs/rev_1/03_gwas_estimation/summarystats_',i,'_.txt'), data.table = F)
+  
+  #run locus breaker on each of the factors summary stats
+  regions[[i]] <- locus.breaker(res=sstats[[i]], p.label = 'P', chr.label = 'CHR', pos.label = 'BP')
+  regions[[i]][, 'trait'] <- i 
+  
+}
+
+regions_factors <- do.call(rbind, regions)
+rownames(regions_factors) <-NULL 
+head(regions_factors)
+dim(regions_factors)#194 significant genomic regions
+
+table(regions_factors$trait) #nuber of genomic regions per factor
+fwrite(regions_factors, 'outputs/rev_1/04_genomic_regions_factors/regions_factors.txt', row.names = F, col.names = T, sep = '\t')
+
+```
+
+## venndiagram of overlaps between genomic regions
+
+We used ChIPpeakAnno::makeVennDiagram() to plot the overlaps between loci in a venn diagram. 
+
+```{r}
+
+#prepare the Granges object of the genomic regions positions. One list with three elements. 
+f_ranges <- list()
+
+for(i in c('f1', 'f2', 'f3')){
+
+f_ranges[[i]] <- GRanges(seqnames = regions_factors[which(regions_factors$trait==i),]$chr, IRanges(as.numeric(regions_factors[which(regions_factors$trait==i),]$start),as.numeric(regions_factors[which(regions_factors$trait==i),]$end)))
+
+}
+
+#save venndiagram
+pdf(width = 14, height = 14, file = 'outputs/rev_1/04_genomic_regions_factors/venn_f1_f2_f3_loci.pdf')
+ChIPpeakAnno::makeVennDiagram(Peaks=f_ranges,connectedPeaks = 'keepAll',
+                                     NameOfPeaks=c("F1", "F2", "F3"),
+                                     imagetype="png" ,
+                                     height = 480 , 
+                                     width = 480 , 
+                                     resolution = 300,
+                                     compression = "lzw",
+                                     lwd = 1,
+                                     cex = 1.5,
+                                     cat.cex = 2,
+                                     cat.default.pos = "outer",
+                                     cat.pos = c(-27, 27, 135),
+                                     cat.dist = c(0.055, 0.055, 0.085),
+                                     cat.fontfamily = "sans",
+                                     rotation = 1
+)
+
+dev.off()
+
+#plot it
+ChIPpeakAnno::makeVennDiagram(Peaks=f_ranges,connectedPeaks = 'keepAll',
+                                     NameOfPeaks=c("F1", "F2", "F3"),
+                                     imagetype="png" ,
+                                     height = 480 , 
+                                     width = 480 , 
+                                     resolution = 300,
+                                     compression = "lzw",
+                                     lwd = 1,
+                                     cex = 1.5,
+                                     cat.cex = 2,
+                                     cat.default.pos = "outer",
+                                     cat.pos = c(-27, 27, 135),
+                                     cat.dist = c(0.055, 0.055, 0.085),
+                                     cat.fontfamily = "sans",
+                                     rotation = 1
+)
+```
+### find overlaps with ChIPpeakAnno::findOverlapsOfPeaks()
+
+```{r paged.print=TRUE}
+ChIPpeakAnno::findOverlapsOfPeaks(f_ranges)
+```
+
+
+### a function to use the ChIPpeakAnno::findOverlapsOfPeaks() for plotting upset plots
+
+This function is for obtaining a combination matrix for plotting and UpSet plot from Granges names. It uses the names of the peaks from the results of findOverlapsOfPeaks. 
+It only works in the case of a three-element list. (Tested only with 2 and 3 groups)
+
+```{r}
+
+lists_forupset <- function(peaks, traits){ 
+  #allocate lists
+  require(ComplexHeatmap)
+  require(ChIPpeakAnno)
+  require(stringr)
+  
+  ovl_f <- ChIPpeakAnno::findOverlapsOfPeaks(peaks)
+  
+  un <- list()
+  final <- list(list())
+  sh <- list()
+  #create the lists and put it the elements that are unique for each trait
+  for( i in 1:length(traits)){
+    tt<-traits[i]
+    filt <- str_starts(names(ovl_f$uniquePeaks@ranges),tt, negate = FALSE)
+    un[[tt]] <- names(ovl_f$uniquePeaks@ranges)[filt]
+  }
+  
+  #put into the lists the element that are shared among the lists
+  for(k in 1:length(ovl_f$mergedPeaks$peakNames)){
+    
+    check_in <- traits %in% substring(ovl_f$mergedPeaks$peakNames[[k]], first = 1, last = 2) #check if there is f1, f2 or f3
+    
+    for(u in 1:length(check_in)){
+      tt<-traits[u]
+      if(check_in[u]==T){
+        un[[tt]][[length(un[[tt]])+1]] <- paste0(ovl_f$mergedPeaks$peakNames[[k]], collapse = '-')
+      }
+      
+    }
+  }
+  
+  #generate the output
+ 
+  cm <- make_comb_mat(un, mode = 'distinct')
+  return(cm)
+  
+}
+```
+
+### Plot Upset plot
+
+```{r message=TRUE, warning=TRUE, paged.print=FALSE}
+cm <- lists_forupset(f_ranges, traits = c('f1', 'f2', 'f3')) 
+
+#save
+pdf(width = 14, height = 14, file = 'outputs/rev_1/04_genomic_regions_factors/upset_f1_f2_f3_loci.pdf')
+UpSet(cm, set_order = c("f1", "f2", "f3"), comb_order = order(comb_size(cm), decreasing = F),
+      comb_col = c(brewer.pal(8, 'Set2')[c(7,6,6,6)],brewer.pal(12, 'Paired')[c(2,4,6)]),
+      top_annotation = upset_top_annotation(cm, add_numbers = TRUE, height = unit(6, "cm")),
+      left_annotation = upset_left_annotation(cm, add_numbers = TRUE, width = unit(3,'cm'), gp = gpar(fill = brewer.pal(5, 'Greys')[1])  ),
+      row_title = "Factor", 
+      column_title = " Physical intersection of factor loci"
+)
+dev.off()
+
+#plot
+UpSet(cm, set_order = c("f1", "f2", "f3"), comb_order = order(comb_size(cm), decreasing = F),
+      comb_col = c(brewer.pal(8, 'Set2')[c(7,6,6,6)],brewer.pal(12, 'Paired')[c(2,4,6)]),
+      top_annotation = upset_top_annotation(cm, add_numbers = TRUE, height = unit(6, "cm")),
+      left_annotation = upset_left_annotation(cm, add_numbers = TRUE, width = unit(3,'cm'), gp = gpar(fill = brewer.pal(5, 'Greys')[1])  ),
+      row_title = "Factor", 
+      column_title = " Physical intersection of factor loci"
+)
+
+```
+
+### locus_lister and locus breaker functions
+
+Locus lister identifies significant genomic regions with the locus.breaker function. Then creates a table of all the loci for all traits and puts them together.
+Then looks at the overlapps between the loci and creates a macro loci that do not overlapp among them and assigns them a unique number (column pan_loci).
+The function requires the sumstatst  have the columns: SNP, CHR,BP, A2 (EFFECT_ALLELE), A1 (NON_EFFECT_ALLELE), BETA,SE, P.
+The relevant point is that it assigns a index to the genomic regions that are overlapping that it will be usefull to retrieve the overlapping genomic regions.
+
+```{r}
+
+locus.breaker <- function (res, p.sig = 5e-08, p.limit = 1e-05, hole.size = 250000, 
+  p.label = "P", chr.label = "CHR", pos.label = "BP") 
+{
+  res = res[order(as.numeric(res[, chr.label]), as.numeric(res[, 
+    pos.label])), ]
+  res = res[which(res[, p.label] < p.limit), ]
+  trait.res = c()
+  for (j in 1:22) {
+    res.chr = res[which(res[, chr.label] == j), ]
+    if (nrow(res.chr) > 1) {
+      holes = res.chr[, pos.label][-1] - res.chr[, pos.label][-length(res.chr[, 
+        pos.label])]
+      gaps = which(holes > hole.size)
+      if (length(gaps) > 0) {
+        for (k in 1:(length(gaps) + 1)) {
+          if (k == 1) {
+            res.loc = res.chr[1:(gaps[k]), ]
+          }
+          else if (k == (length(gaps) + 1)) {
+            res.loc = res.chr[(gaps[k - 1] + 1):nrow(res.chr), 
+              ]
+          }
+          else {
+            res.loc = res.chr[(gaps[k - 1] + 1):(gaps[k]), 
+              ]
+          }
+          if (min(res.loc[, p.label]) < p.sig) {
+            start.pos = min(res.loc[, pos.label], na.rm = T)
+            end.pos = max(res.loc[, pos.label], na.rm = T)
+            chr = j
+            best.snp = res.loc[which.min(res.loc[, p.label]), 
+              ]
+            line.res = c(chr, start.pos, end.pos, unlist(best.snp))
+            trait.res = rbind(trait.res, line.res)
+          }
+        }
+      }
+      else {
+        res.loc = res.chr
+        if (min(res.loc[, p.label]) < p.sig) {
+          start.pos = min(res.loc[, pos.label], na.rm = T)
+          end.pos = max(res.loc[, pos.label], na.rm = T)
+          chr = j
+          best.snp = res.loc[which.min(res.loc[, p.label]), 
+            ]
+          line.res = c(chr, start.pos, end.pos, unlist(best.snp))
+          trait.res = rbind(trait.res, line.res)
+        }
+      }
+    }
+    else if (nrow(res.chr) == 1) {
+      res.loc = res.chr
+      if (min(res.loc[, p.label]) < p.sig) {
+        start.pos = min(res.loc[, pos.label], na.rm = T)
+        end.pos = max(res.loc[, pos.label], na.rm = T)
+        chr = j
+        best.snp = res.loc[which.min(res.loc[, p.label]), 
+          ]
+        line.res = c(chr, start.pos, end.pos, unlist(best.snp))
+        trait.res = rbind(trait.res, line.res)
+      }
+    }
+  }
+  print(trait.res)
+  trait.res = as.data.frame(trait.res, stringsAsFactors = FALSE)
+  trait.res = trait.res[, -(which(names(trait.res) == chr.label))]
+  names(trait.res)[1:3] = c("chr", "start", "end")
+  trait.res
+}
+
+#### locus breaker
+
+
+locus_lister <- function(my_paths, gwas_names) {
+  
+  require(data.table)
+  require(dplyr)
+  require(GenomicRanges)
+  
+  SNPs <- list()
+  list_of_files <- list()
+  
+  for( i in c(1:length(my_paths))){
+    #load the sumstats and put them into a list
+    list_of_files[[i]] <- fread(my_paths[[i]], data.table = F)
+    SNPs[[i]]<- list_of_files[[i]]$SNP
+  }
+  
+  shared_SNPs <- Reduce(intersect, SNPs) #compute the SNPs that are present in all the summary stats
+  names(list_of_files) <- unlist(gwas_names)
+  loci <- list()
+  
+  for(i in c(1:length(my_paths))){
+    to_take <- gwas_names[[i]]
+    sstats <- list_of_files[[to_take]]
+    colnames(sstats) <- toupper(colnames(sstats))
+    
+    sstats <- select(sstats, c(SNP, CHR,BP, A2, A1, BETA,SE, P))
+    sstats <- sstats[which(sstats$SNP %in% shared_SNPs),] #select only the SNPs that are shared among all the traits
+    loci[[i]] <-  locus.breaker(sstats)  #locus breaker function is in my R profile
+    loci[[i]]$trait <- rep(to_take, nrow(loci[[i]]))
+  }
+  
+  all_loci <- do.call(rbind, loci) #create the listof all the loci
+  
+  pan_loci <- reduce(GRanges(seqnames = all_loci$chr, IRanges(as.numeric(all_loci$start), as.numeric(all_loci$end)))) 
+  pan_loci_non_reduced <- GRanges(seqnames = all_loci$chr, IRanges(as.numeric(all_loci$start), as.numeric(all_loci$end)))
+  
+  overlapping <- findOverlaps(pan_loci_non_reduced, pan_loci) #find overlaps between all the loci and use it as an index of the unique non overlapping loci
+  all_loci$pan_locus <- rep(0, nrow(all_loci)) #allocate the column 
+  all_loci[overlapping@from,]$pan_locus <- overlapping@to  #assinging the number as index of which macro loci is overlapping 
+  all_loci$pan_locus_name <- rep(0, nrow(all_loci))
+  
+  #assign a name refereed to the position of each pan_locus
+  for(k in 1:length(unique(all_loci$pan_locus))){
+    all_loci[which(all_loci$pan_locus==k), ]$pan_locus_name <- paste0(all_loci[which(all_loci$pan_locus==k), ]$chr,'_',  min(all_loci[which(all_loci$pan_locus==k), ]$start), '_',  max(all_loci[which(all_loci$pan_locus==k), ]$end))
+  }
+  
+  rownames(all_loci) <- NULL
+  return(all_loci)
+  
+}
+
+
+```
+
+
+
+### Run locus lister of the factors 
+
+```{r paged.print=TRUE}
+
+paths <- c('outputs/rev_1/03_gwas_estimation/summarystats_f1_.txt',
+           'outputs/rev_1/03_gwas_estimation/summarystats_f2_.txt',
+           'outputs/rev_1/03_gwas_estimation/summarystats_f3_.txt')
+regions_factors_index <- locus_lister(paths, list('f1','f2','f3'))
+
+fwrite(regions_factors_index, 'outputs/rev_1/04_genomic_regions_factors/regions_factors_with_index.txt', row.names = F, col.names = T, sep = '\t')
+
+```
+
+
+

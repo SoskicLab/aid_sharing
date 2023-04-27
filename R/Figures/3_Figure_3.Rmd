@@ -1,0 +1,390 @@
+---
+title: "Figure 3"
+output: 
+  html_document: 
+    toc: yes
+author: 'Pietro Demela, Nicola Pirastu, Blagoje Soskic'
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+## Libraries
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+library(data.table)
+library(stringr)
+library(biomaRt)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(dplyr)
+```
+
+## Figure 3A
+
+### Load dataset and mart
+
+Mart for gene name conversion
+```{r}
+
+kegg <- readRDS('outputs/rev_1/10_pathways/kegg.RDS')
+mart <- useMart("ensembl")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+
+```
+
+### Get gene names from ensemble gene ID
+
+```{r paged.print=FALSE}
+#extract the genes that were into a kegg pathway
+res <- kegg$result
+genes <- unique(strsplit(paste0(res$intersection, collapse = ','), split = ',')[[1]])
+head(genes)
+#get the gene names from ensmebl gene id 
+genes_symbol <- getBM(filters= "ensembl_gene_id", attributes= c('ensembl_gene_id', 'hgnc_symbol'),values=  genes,mart=mart )
+
+head(genes_symbol)
+
+#check for duplicated entries
+table(duplicated(genes_symbol$ensembl_gene_id))
+table(duplicated(genes_symbol$hgnc_symbol))
+
+t_t <- data.frame(genes) 
+
+
+#create a mapping table between ensmeble and geneID ordered as the gene lists that follows the order of factors in kegg
+colnames(genes_symbol)[1] <- 'genes'
+dim(t_t)
+t_t <- inner_join(t_t, genes_symbol, 'genes')
+head(t_t)
+
+
+
+```
+
+Create a matrix containing the unique pathway name and the columns for each factor that will serve to plot the -log10pvalues
+
+```{r}
+
+kg <- kegg$result[,c('query', 'p_value', 'term_name')]
+
+#create mtp, a matrix containing the unique pathway name and the columns containing the factors
+mtp <- matrix(nrow = length(unique(kg$term_name)), ncol = 3)
+colnames(mtp) <- c('f1', 'f2', 'f3')
+rownames(mtp) <- unique(kg$term_name)
+
+#show mtp
+mtp
+
+#populate mtp with the z scores
+for(i in c('f1', 'f2', 'f3')){
+      kg[ which(kg$query==i),]$term_name
+      mtp[, i][base::match(  kg[ which(kg$query==i), ]$term_name, names(mtp[, i]))] <- -log10(kg[ which(kg$query==i), ]$p_value) #important to set the radius of the circle
+}
+
+#show populated mtp
+mtp
+
+# add zeros to the empty rows
+for(i in c('f1', 'f2', 'f3')){
+  mtp[,i][which(is.na(mtp[,i]))] <- 0
+}
+
+#show mtp
+mtp
+
+#toupper case
+colnames(mtp) <- toupper(colnames(mtp))
+
+#order mtp with the shared pathways on top and the genes to be grouped by factors
+otp <- mtp[c(1,6,2,4,7,8,3,5,9,10,11,12),]
+
+otp
+```
+
+
+Create a table and add the information about the genes, shared or not.
+gpt table stores the information about a certain gene belonging to a certain pathway
+
+```{r}
+#gtp matrix will store the information about a certain gene belonging to a certain pathway
+gtp <- matrix(nrow = length(unique(kg$term_name)), ncol = nrow(genes_symbol))
+rownames(gtp) <- unique(kg$term_name)
+colnames(gtp) <- genes_symbol$hgnc_symbol
+
+#it looks like that
+gtp
+
+
+
+#populate the matrix
+for(k in 1:length(unique(res$term_name)) ){
+  
+        tt <- unique(res$term_name)[k]
+        g_s <- list()
+        u <- vector()
+        
+        #if the intersection is between three pathways
+        if( table(res$term_name)[tt] == 3 ){
+          
+          
+                  for(j in 1:3){
+                           
+                     
+                          u <-  res[which(res$term_name==tt),][j,]$query
+                          g_s[[u]] <-  genes_symbol[which(genes_symbol$genes %in% str_split( res[which(res$term_name==tt),][j,]$intersection, pattern = ','  )[[1]]) ,]$hgnc_symbol
+                         
+                          
+                  }        
+                
+                    #make a combination matrix and search for all the combinations
+                    cmb <- make_comb_mat(g_s, mode = 'distinct')
+                    
+                    if('110' %in% comb_name(cmb)){
+                      gtp[tt,extract_comb(cmb, '110')] <- paste0(names(g_s)[c(1,2)], collapse = '-') 
+                    }
+                    
+                    if('011' %in% comb_name(cmb)){
+                    gtp[tt,extract_comb(cmb, '011')] <- paste0(names(g_s)[c(2,3)], collapse = '-') 
+                    }
+                    
+                     if('101' %in% comb_name(cmb)){
+                      gtp[tt,extract_comb(cmb, '101')] <- paste0(names(g_s)[c(1,3)], collapse = '-') 
+                    }
+                    
+                    if('100' %in% comb_name(cmb)){
+                    gtp[tt,extract_comb(cmb, '100')] <- paste0(names(g_s)[1], collapse = '-')
+                    }
+                    
+                    if('010' %in% comb_name(cmb)){
+                    gtp[tt,extract_comb(cmb, '010')] <- paste0(names(g_s)[2], collapse = '-')
+                    }
+                    
+                    if('001' %in% comb_name(cmb)){
+                    gtp[tt,extract_comb(cmb, '001')] <- paste0(names(g_s)[3], collapse = '-')
+                    
+                    }
+                    
+                    if('111 '%in% comb_name(cmb)){
+                    gtp[tt,extract_comb(cmb, '111')] <- paste0(names(g_s)[1:3], collapse = '-')
+                    
+                    }
+                
+          rm(cmb)
+          
+            #if the intersection is between two elements do this
+        } else if( table(res$term_name)[tt] == 2 ){
+           
+              for(i in 1:nrow(res[which(res$term_name==tt),])){
+                           
+                     
+                          u <-  res[which(res$term_name==tt),][i,]$query
+                          g_s[[u]] <-  genes_symbol[which(genes_symbol$genes %in% str_split( res[which(res$term_name==tt),][i,]$intersection, pattern = ','  )[[1]]) ,]$hgnc_symbol
+                         
+                          
+                  }        
+                
+                    #make a combination matrix and search for all the combinations
+                   cmb <- make_comb_mat(g_s, mode = 'distinct')
+                    
+                    if('11' %in% comb_name(cmb)){
+                      gtp[tt,extract_comb(cmb, '11')] <- paste0(names(g_s)[1:2], collapse = '-') 
+                    }
+                    
+                    if('01' %in% comb_name(cmb)){
+                    gtp[tt,extract_comb(cmb, '01')] <- paste0(names(g_s)[2], collapse = '-') 
+                    }
+                    
+                    if('10' %in% comb_name(cmb)){
+                    gtp[tt,extract_comb(cmb, '10')] <- paste0(names(g_s)[1], collapse = '-')
+                    }
+                    
+          rm(cmb)
+          
+         }
+           
+           
+          #if there is no intersection proceed as follows
+          else if( table(res$term_name)[tt] == 1 ){
+          
+            for(i in 1:nrow(res[which(res$term_name==tt),])){
+                      ges <-  genes_symbol[which(genes_symbol$genes %in% str_split( res[which(res$term_name==tt),][i,]$intersection, pattern = ','  )[[1]]) ,]$hgnc_symbol
+                      gtp[tt ,ges] <- res[which(res$term_name==tt),][i,]$query
+          }
+        }
+        
+        
+}
+
+
+
+ggtp <-  gtp[rownames(otp),t_t$hgnc_symbol]
+
+#look at the combinations
+names(table(ggtp))
+
+#show ggtp
+ggtp
+```
+
+
+
+### Plot heatmap section
+
+```{r}
+colori <- ComplexHeatmap:::default_col(gtp[,t_t$hgnc_symbol])
+colori[c('f1', 'f2', 'f3', 'f1-f3', 'f2-f3', 'f1-f2')] <-  rep('white', 6)
+
+a<-Heatmap(ggtp, 
+           #column_title = "Genes and pathways KEGG",
+           rect_gp = gpar(col = brewer.pal(5, 'Greys')[2], lwd = 0.25), 
+           column_title_gp = gpar(fontsize = 20, fontface = "bold"),
+           col=colori, 
+           border=T,
+           row_names_gp = gpar( fontsize=0),
+           column_names_gp = gpar(fontsize=25),
+           column_names_side = 'bottom',
+           show_heatmap_legend = F,
+           row_title = "Pathways",
+           na_col = 'white', 
+           height = unit(6.5, 'cm'), width = 28, 
+           top_annotation =  columnAnnotation(legend = anno_empty(border = F, width =  unit(28, "cm"), height = unit(2, 'cm'))), #make space for the annotation
+           
+           
+           cell_fun = function(j, i, x, y, width, height, fill) {
+             if(!is.na(ggtp[,t_t$hgnc_symbol][i, j] )){
+               
+               if(ggtp[,t_t$hgnc_symbol][i, j]== 'f1' ){
+                 grid.points(x = x, y = y, pch = 22, size = unit(18, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[1], fill=brewer.pal(5, 'Paired')[2] ))
+               }
+               
+               
+               if(ggtp[,t_t$hgnc_symbol][i, j]== 'f2' ){
+                 grid.points(x = x, y = y, pch = 22, size = unit(18, "mm"), gp = gpar(col = brewer.pal(5, 'Paired')[3], fill=brewer.pal(5, 'Paired')[4]))
+               }
+               
+               if(ggtp[,t_t$hgnc_symbol][i, j]== 'f3' ){
+                 grid.points(x = x, y = y, pch = 22, size = unit(18, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[5], fill=brewer.pal(6, 'Paired')[6]))
+               }
+               
+               if(ggtp[,t_t$hgnc_symbol][i, j]== 'f1-f3' ){
+                 grid.points(x = x, y = y, pch=22, size = unit(18, "mm"), gp = gpar(col = 'grey', fill='black'))
+               }
+               
+               if(ggtp[,t_t$hgnc_symbol][i, j]== 'f2-f3' ){
+                 grid.points(x = x, y = y, pch=22, size = unit(18, "mm"), gp = gpar(col = 'grey', fill='yellow'))
+               }
+               
+               if(ggtp[,t_t$hgnc_symbol][i, j]== 'f1-f2' ){
+                 grid.points(x = x, y = y, pch=22, size = unit(18, "mm"), gp = gpar(col = 'black', fill='grey'))
+               }
+               
+             }
+             
+           }
+)
+```
+
+
+### Plot the pvalues section
+
+```{r}
+b <- Heatmap(otp,  
+             rect_gp = gpar(col = brewer.pal(5, 'Greys')[2], lwd = 0.25), 
+             cluster_rows = F,
+             cluster_columns = F,
+             col = c('white', 'white'), 
+             border=T,
+             show_column_dend = F,
+             show_row_dend = F,
+             row_names_gp = gpar(fontsize=3),
+             row_names_side = 'left',
+             width = unit(6.5, 'cm'),
+             height = unit(28, 'cm'),
+             show_heatmap_legend = F,
+             column_names_gp = gpar(fontsize=25),
+             column_names_side = 'bottom',
+             column_names_rot = 360,
+             top_annotation =  columnAnnotation(legend = anno_empty(border = F,
+                                                                    width =  unit(28, "cm"), height = unit(2, 'cm'))), #create an empty annotation for adding the legend elements 
+             
+             cell_fun = function(j, i, x, y, width, height, fill) {
+               if(otp[i, j] > 0){
+                 grid.circle(x = x, y = y, r = unit(otp[i,j], 'mm'), gp = gpar(fill = brewer.pal(7,'BrBG')[3], col = 'black')) #the unit of the -log10(pvalues) is mm as in the legend
+                 #grid.text(signif((10^100)^(-otp[i,j]),2), x=x,  y = y, gp=gpar(fontsize=10)) #in case you wish to see the pvalues in the center of the circle
+                 
+               }
+             }
+)
+
+```
+
+
+### Save as pdf
+
+```{r}
+#save as pdf
+pdf('outputs/rev_1/Figures/Fig_3/3A_semaphor_plot.pdf', height = 36, width = 36)
+#plot the heatmaps
+b+a
+#for adding the legend on the pvalues scales, create the same heatmap with fixed values and copy paste them in illustrator 
+for(k in 1:6) {
+  i <- c(0.05,0.30,0.50, 0.70, 0.80,0.90)[k] #this are the positions 
+  
+  decorate_annotation('legend', {
+    
+    grid.circle(x=i, r= unit(-log10(c(10^-10,10^-8,10^-6,10^-4,10^-2,0.05)), 'mm')[k],gp = gpar(fill = brewer.pal(7,'BrBG')[3], col = 'black')) #this are the pvalues that are shown in the legend, the dimension of the -log10(p) is in mm
+    grid.text(x=i, round(-log10(c(10^-10,10^-8,10^-6,10^-4,10^-2,0.05)), 3)[k]) #show the p
+  })
+}
+
+dev.off()
+```
+
+### Plot it here
+
+```{r fig.height=30, fig.width=30}
+
+b+a
+#for adding the legend on the pvalues scales, create the same heatmap with fixed values and copy paste them in illustrator 
+for(k in 1:6) {
+  i <- c(0.05,0.30,0.50, 0.70, 0.80,0.90)[k] #this are the positions 
+  
+  decorate_annotation('legend', {
+    
+    grid.circle(x=i, r= unit(-log10(c(10^-10,10^-8,10^-6,10^-4,10^-2,0.05)), 'mm')[k],gp = gpar(fill = brewer.pal(7,'BrBG')[3], col = 'black')) #this are the pvalues that are shown in the legend, the dimension of the -log10(p) is in mm
+    grid.text(x=i, round(-log10(c(10^-10,10^-8,10^-6,10^-4,10^-2,0.05)), 3)[k]) #show the p
+  })
+}
+
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

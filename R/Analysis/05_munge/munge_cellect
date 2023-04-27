@@ -1,0 +1,32 @@
+
+
+
+
+
+python ldsc/mtag_munge.py \
+--sumstats /project/aid_sharing/AID_sharing/outputs/rev_1/03_gwas_estimation/summarystats_f1_.txt \
+--merge-alleles data/ldsc/w_hm3.snplist \
+--n-value 2653  \
+--keep-pval \
+--p P \
+--out /project/aid_sharing/AID_sharing/outputs/rev_1/05_munge/munge_cellect/f1_munged.txt
+
+
+
+python ldsc/mtag_munge.py \
+--sumstats /project/aid_sharing/AID_sharing/outputs/rev_1/03_gwas_estimation/summarystats_f2_.txt \
+--merge-alleles data/ldsc/w_hm3.snplist \
+--n-value 3478  \
+--keep-pval \
+--p P \
+--out /project/aid_sharing/AID_sharing/outputs/rev_1/05_munge/munge_cellect/f2_munged.txt
+
+
+
+python ldsc/mtag_munge.py \
+--sumstats /project/aid_sharing/AID_sharing/outputs/rev_1/03_gwas_estimation/summarystats_f3_.txt \
+--merge-alleles data/ldsc/w_hm3.snplist \
+--n-value 13037 \
+--keep-pval \
+--p P \
+--out /project/aid_sharing/AID_sharing/outputs/rev_1/05_munge/munge_cellect/f3_munged.txt

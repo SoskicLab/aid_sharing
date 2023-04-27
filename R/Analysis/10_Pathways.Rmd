@@ -1,0 +1,258 @@
+---
+title: "10 Pathways"
+output: 
+  html_document: 
+    toc: yes
+author: 'Pietro Demela'
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+
+## Libraries
+
+```{r}
+library(httr)
+library(rlist)
+library(dplyr)
+library(data.table)
+library(gprofiler2)
+library(biomaRt)
+```
+
+## Opentargets conversios of rsID to chr:bp_ref_alt 
+
+The script queries Opentargets platform to convert rsID into IDformat. ID formats are used then to query Opentargets variant-to-gene.
+
+```{r paged.print=FALSE}
+#load the table of loci with the lead SNPs
+loc <- fread('outputs/rev_1/coloc_eqtl_mr/loci_definitions/final_locus_table.tsv', data.table = F)
+#extract the SNPs
+snps <- unique(loc[which(loc$trait %in% c('f1', 'f2', 'f3')),]$SNP)
+
+#create a dataframe to map rsID to refID
+q <- list()
+mat <- data.frame(rsID=snps, Markername=rep('empty', length(snps)))
+
+#query opentargets datases once for each SNP and store the returned rsID
+for(i in snps){ 
+  
+        #write the query every time with the snps
+        query_string = 
+          paste(
+            '
+            query useSearchToConvertRSIDIntoIDFormat {
+              search(queryString:',paste0('\"',i, '\"'),'){
+                totalVariants
+                variants{
+                  id
+                }
+              }
+            }
+            '
+          )
+        
+        #post the query 
+        q[[i]] <- POST(url="https://api.genetics.opentargets.org/graphql"
+                       , body=list('query'=query_string), encode='json')
+        
+        #match and store the ID corresponfing to the rsID
+        mat[mat$rsID==i, 2]<- content(q[[i]])$data$search$variants[[1]]$id
+  
+}
+
+#mat contains the rsID and the respective IDs Markername.
+head(mat)
+```
+
+## Query Opentargets for variant to gene
+
+mat contains the rsID and the respective IDs Markername. The prioritised gene will have the ensemble ID.
+
+```{r paged.print=FALSE}
+#query opentargets by marker name
+
+#allocate list
+first <- list()
+
+for(k in mat$Markername){
+
+     
+      # Build query string
+      query_string = "
+      query v2g($variantId: String!) {
+        genesForVariant(variantId: $variantId) {
+          gene {
+            id
+          }
+          variant
+          overallScore
+          distances {
+            sourceId
+            aggregatedScore
+            tissues {
+            	distance
+            }
+          }
+        }
+      }
+      "
+      
+    
+      # Perform POST request
+      request <- POST(url= "https://api.genetics.opentargets.org/graphql", 
+                  body=list(query = query_string, variables = list("variantId" = k)),
+                  encode='json')
+     
+      
+      #flatten the list
+      list_result <- content(request)$data$genesForVariant
+      x <-  lapply(list_result, list.flatten)
+      df = bind_rows(x)
+      
+      #save and store the hit gene with the higher score
+      first[[k]] <- as.data.frame(df[order(df$overallScore, decreasing = T),][1, c('gene.id', 'variant' ,'overallScore')])
+
+}
+
+#put the output in the same dataframe
+v2genes <- do.call(rbind,first)
+
+#check how many SNps have a v2g gene
+dim(v2genes)
+dim(mat)
+
+#add the rsid to the closest relevant gene
+colnames(v2genes)[2] <- 'Markername'
+v2g_rsID <- inner_join(mat, v2genes, 'Markername')
+
+factor_loci <- loc[which(loc$trait %in% c('f1', 'f2', 'f3')),]
+factor_loci$v2g <- rep('empty', nrow(factor_loci))
+
+#add the closest gene to the locus table
+for(i in 1:nrow(factor_loci)){
+  
+  factor_loci[i,'v2g'] <- v2g_rsID[which(v2g_rsID$rsID== factor_loci[i,]$SNP),]$gene.id 
+  
+}
+
+
+head(factor_loci)
+
+```
+
+
+## Query Kegg database and get pathways
+
+Query with the ensemble gene ID
+
+```{r paged.print=FALSE}
+#query a list with each element of the list containing the genes per factor.
+
+kegg <- gost(query = list(f1=unique(factor_loci[which(factor_loci$trait=='f1'),]$v2g), 
+                          f2=unique(factor_loci[which(factor_loci$trait=='f2'),]$v2g), 
+                          f3=unique(factor_loci[which(factor_loci$trait=='f3'),]$v2g)),
+             sources = c('KEGG'), 
+             significant = T, 
+             evcodes = T)
+
+kegg$result
+
+saveRDS(kegg, 'outputs/rev_1/10_pathways/kegg.RDS')
+
+```
+
+### Add gene names
+Mart for gene name conversion
+```{r}
+kegg <- readRDS('outputs/rev_1/10_pathways/kegg.RDS')
+mart <- useMart("ensembl")
+mart <- useDataset("hsapiens_gene_ensembl", mart)
+```
+
+### Get gene names from ensemble gene ID
+
+```{r paged.print=FALSE}
+#extract the genes that were into a kegg pathway
+res <- kegg$result
+genes <- unique(factor_loci$v2g)
+head(genes)
+#get the gene names from ensmebl gene id 
+genes_symbol <- getBM(filters= "ensembl_gene_id", attributes= c('ensembl_gene_id', 'hgnc_symbol'),values=  genes,mart=mart )
+
+head(genes_symbol)
+
+#check for duplicated entries
+table(duplicated(genes_symbol$ensembl_gene_id))
+table(duplicated(genes_symbol$hgnc_symbol))
+
+
+#add the hgnc symbol to each of the SNPs
+factor_loci$v2g_gene_name <- rep('-', nrow(factor_loci))
+for(k in 1:nrow(factor_loci)){
+  
+  factor_loci[k, 'v2g_gene_name' ] <- genes_symbol[which(genes_symbol$ensembl_gene_id==factor_loci[k, 'v2g' ]),'hgnc_symbol']
+  
+}
+
+head(factor_loci)
+
+fwrite(factor_loci, 'outputs/rev_1/10_pathways/factor_loci_genes.txt', quote = F, sep='\t', col.names = T)
+```
+
+## GO terms
+
+```{r paged.print=TRUE}
+go <- gost(query = list(f1=unique(factor_loci[which(factor_loci$trait=='f1'),]$v2g), 
+                          f2=unique(factor_loci[which(factor_loci$trait=='f2'),]$v2g), 
+                          f3=unique(factor_loci[which(factor_loci$trait=='f3'),]$v2g)),
+           sources = c('GO'), significant = T, evcodes = T)
+
+saveRDS(go, 'outputs/rev_1/10_pathways/go.RDS')
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,217 @@
+---
+title: "Figure 5"
+date: "30/01/2023"
+output: 
+  html_document: 
+    toc: yes
+author: 'Pietro Demela, Nicola Pirastu, Blagoje Soskic'
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+## Figure 5A
+### Libraries
+
+```{r}
+library(data.table)
+library(ComplexHeatmap)
+library(RColorBrewer)
+```
+
+### load and assemble the table of MR results
+
+```{r load and assemble MR results, paged.print=FALSE}
+mr_new <- fread('outputs/rev_1/Supplementary_tables/13_Supplementary_table_eQTL_MR_results.csv', data.table = F)
+head(mr_new)
+```
+
+
+
+```{r fig.height=25, fig.width=8}
+#subset only the factors
+mr_f <- mr_new[which(mr_new$TRAIT %in% c('Falrg', 'Faid', 'Fgut') & mr_new$PVAL<0.05),]
+
+#add a column with the direction fo the effect
+mr_f$effect <- ifelse(mr_f$B>0, 1, -1)
+
+#select the columns needed to plot
+plot_f <- mr_f[, c(5,6,7,9,8)]
+head(plot_f)
+#check for duplicates
+table(duplicated(plot_f[,c(1,2,3,4)]))
+
+#add the name of the MR results column, gene and locusnames
+plot_f$name <-paste(plot_f$GENE, plot_f$`LOCUS_NAME_(CHR:START_END)`) 
+
+
+head(plot_f)
+
+mat <-matrix(nrow =length(unique(plot_f$name)), ncol = length(unique(plot_f$CELL_TYPE))) 
+
+rownames(mat) <- unique(plot_f$name)
+colnames(mat) <- unique(plot_f$CELL_TYPE)
+
+
+for(i in rownames(mat)){
+  
+  for(k in colnames(mat)){
+    
+    mat[i,k] <- ifelse(length(plot_f[which(plot_f$name==i & plot_f$CELL_TYPE==k),]$effect)!=0, paste0(plot_f[which(plot_f$name==i & plot_f$CELL_TYPE==k) , c( 'effect', 'TRAIT')], collapse = ''), NA)
+    
+  }
+}
+
+names(table(mat))
+colori <- ComplexHeatmap:::default_col(mat)
+colori[names(table(mat))] <-  rep('white', 7)
+
+for(i in 1:nrow(mat)){
+  rownames(mat)[i] <- strsplit(rownames(mat)[i],' ')[[1]][1]
+}
+
+colnames(mat)
+dim(mat)
+
+mat<- mat[, c('CD4NC', 'CD4ET', 'CD4SOX4', 'CD8NC', 'CD8ET', 'CD8S100B','BIN', 'BMem', 'Plasma', 'MonoC', 'MonoNC', 'DC' ,'NK', 'NKR')]
+dim(mat)
+```
+
+### Plot 5A
+```{r fig.height=20, fig.width=8}
+#in alfabetical order
+mat <- mat[order(row.names(mat)),]
+Heatmap(mat, 
+        #column_title = "Genes and pathways KEGG",
+        rect_gp = gpar(col = brewer.pal(5, 'Greys')[2], lwd = 0.25), 
+        column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+        col=colori, 
+        border=T,
+        row_names_gp = gpar( fontsize=8),
+        column_names_gp = gpar(fontsize=8),
+        column_names_side = 'bottom',
+        row_names_side = 'left',
+        show_heatmap_legend = F,
+        row_title = "Genes",
+        na_col = 'white', 
+        height = unit(30, 'cm'), width = 8, 
+        
+        
+        
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          if(!is.na(mat[i, j] )){
+            
+            if(mat[i, j]== '-1Faid' ){
+              grid.points(x = x, y = y, pch = 25, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[4], fill=brewer.pal(5, 'Paired')[4] ))
+            }
+            
+            
+            if(mat[i, j]== '1Faid' ){
+              grid.points(x = x, y = y, pch = 24, size = unit(5, "mm"), gp = gpar(col = brewer.pal(5, 'Paired')[4], fill=brewer.pal(5, 'Paired')[4]))
+            }
+            
+            if(mat[i, j]== '-1Falrg' ){
+              grid.points(x = x, y = y, pch = 25, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[6], fill=brewer.pal(6, 'Paired')[6]))
+            }
+            
+            if(mat[i, j]== '1Falrg' ){
+              grid.points(x = x, y = y, pch = 24, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[6], fill=brewer.pal(6, 'Paired')[6]))
+            }
+            
+            if(mat[i, j]== '1Fgut' ){
+              grid.points(x = x, y = y, pch = 24, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[2], fill=brewer.pal(6, 'Paired')[2]))
+            }
+            
+            if(mat[i, j]== '-1Fgut' ){
+              grid.points(x = x, y = y, pch = 25, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[2], fill=brewer.pal(6, 'Paired')[2]))
+            }
+            
+            if(mat[i, j]== 'c(-1, -1)c(\"Fgut\", \"Faid\")' ){
+              grid.points(x = x, y = y, pch=25, size = unit(5, "mm"), gp = gpar(col = 'grey', fill='yellow'))
+            }
+            
+          }
+          
+        }
+)
+
+
+```
+
+```{r fig.height=30, fig.width=8}
+pdf('outputs/rev_1/Figures/Fig_5/5A_mr_heatmap.pdf', height = 30, width=8)
+Heatmap(mat, 
+        #column_title = "Genes and pathways KEGG",
+        rect_gp = gpar(col = brewer.pal(5, 'Greys')[2], lwd = 0.25), 
+        column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+        col=colori, 
+        border=T,
+        row_names_gp = gpar( fontsize=8),
+        column_names_gp = gpar(fontsize=8),
+        column_names_side = 'bottom',
+        row_names_side = 'left',
+        show_heatmap_legend = F,
+        row_title = "Genes",
+        na_col = 'white', 
+        height = unit(30, 'cm'), width = 8, 
+        
+        
+        
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          if(!is.na(mat[i, j] )){
+            
+            if(mat[i, j]== '-1Faid' ){
+              grid.points(x = x, y = y, pch = 25, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[4], fill=brewer.pal(5, 'Paired')[4] ))
+            }
+            
+            
+            if(mat[i, j]== '1Faid' ){
+              grid.points(x = x, y = y, pch = 24, size = unit(5, "mm"), gp = gpar(col = brewer.pal(5, 'Paired')[4], fill=brewer.pal(5, 'Paired')[4]))
+            }
+            
+            if(mat[i, j]== '-1Falrg' ){
+              grid.points(x = x, y = y, pch = 25, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[6], fill=brewer.pal(6, 'Paired')[6]))
+            }
+            
+            if(mat[i, j]== '1Falrg' ){
+              grid.points(x = x, y = y, pch = 24, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[6], fill=brewer.pal(6, 'Paired')[6]))
+            }
+            
+            if(mat[i, j]== '1Fgut' ){
+              grid.points(x = x, y = y, pch = 24, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[2], fill=brewer.pal(6, 'Paired')[2]))
+            }
+            
+            if(mat[i, j]== '-1Fgut' ){
+              grid.points(x = x, y = y, pch = 25, size = unit(5, "mm"), gp = gpar(col = brewer.pal(6, 'Paired')[2], fill=brewer.pal(6, 'Paired')[2]))
+            }
+            
+            if(mat[i, j]== 'c(-1, -1)c(\"Fgut\", \"Faid\")' ){
+              grid.points(x = x, y = y, pch=25, size = unit(5, "mm"), gp = gpar(col = 'grey', fill='yellow'))
+            }
+            
+          }
+          
+        }
+)
+dev.off()
+```
+
+
+
+
+
+
+
+
+
+
+

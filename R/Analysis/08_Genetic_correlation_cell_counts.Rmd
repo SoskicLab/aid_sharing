@@ -1,0 +1,355 @@
+---
+title: "Genetic correlation with cell counts"
+author: "Pietro Demela"
+date: "12/01/2023"
+output: html_document
+---
+Estimate the genetic correlation between factors, cell counts and other autoimmune diseases
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+
+## Libraries
+
+```{r message=FALSE, warning=FALSE}
+library(data.table)
+library(GenomicSEM)
+library(tidyr)
+library(dplyr)
+library(corrplot)
+library(ggplot2)
+library(stringr)
+library(ggpubr)
+library(RColorBrewer)
+```
+
+
+## Function for preparing the summary stats
+
+Function to prepare the GWAS for the munging depends on dplyr, tidyr, ggplot and data.table
+The function changes the name of the columns as required by the genomicSEM package and saves the files in the provided path (if the path is provided)
+
+```{r prepare_munge, message=TRUE, warning=TRUE, paged.print=TRUE}
+
+prepare_munge <- function(sum_stats, rsID=NA, the_effect_allele, the_non_effect_allele, pvalue, the_OR=NA, the_Beta=NA, the_SE=NA, the_chr=NA, the_bp=NA, to_remove=NA, path = NA, the_MAF=NA, qc=T, plots=T, remove_X_Y_MT=T){
+  
+  #an error if arguments are not provided 
+  if (missing(sum_stats) | missing(the_effect_allele) | missing(the_non_effect_allele) | missing(pvalue) ) {
+    
+      stop( 'At least one argument is missing')
+    
+  } else {
+    
+        require(dplyr)
+        require(data.table)
+        sum_stats <- sum_stats  %>% rename(c(effect_allele = all_of(the_effect_allele), other_allele = all_of(the_non_effect_allele), p = all_of(pvalue) ))
+        
+        sum_stats$p <- as.numeric(sum_stats$p)
+        
+        
+        #conditional options 
+        #remove columns
+        if(!is.na(to_remove[1])){sum_stats <- select(sum_stats,-(all_of(to_remove)))} 
+        
+        #rename the SNP column 
+         if(!is.na(rsID)){ 
+              sum_stats <- rename(sum_stats, SNP=all_of(rsID))
+              sum_stats$SNP <- tolower(sum_stats$SNP)
+         }
+        
+        #rename SE column
+        if(!is.na(the_SE)){ 
+              sum_stats <- rename(sum_stats, SE=all_of(the_SE))
+              sum_stats$SE <- as.numeric(sum_stats$SE)
+        }
+        
+        #rename the effect column
+        if(!is.na(the_OR)){
+              sum_stats <- rename(sum_stats, OR=all_of(the_OR))
+              sum_stats$OR <- as.numeric(sum_stats$OR)
+        }
+        
+        if (!is.na(the_Beta)){
+              sum_stats <- rename(sum_stats, Beta=all_of(the_Beta))
+              sum_stats$Beta <- as.numeric(sum_stats$Beta)
+        } 
+        
+        if (!is.na(the_MAF)){
+              sum_stats <- rename(sum_stats, MAF=all_of(the_MAF))
+              sum_stats$MAF <- as.numeric(sum_stats$MAF)
+        } 
+        
+        if(is.na(the_OR) & is.na(the_Beta) ) {stop('Effect column not specified ')}
+        
+        
+        #rename the CHR column
+        if(!is.na(the_chr)){ sum_stats <-  rename(sum_stats, CHR=all_of(the_chr))}
+        
+        #rename the BP column
+        if(!is.na(the_bp)){ sum_stats <- rename(sum_stats, BP=all_of(the_bp))}
+        
+        
+  
+  #qc if specified
+  if(qc==T){
+        
+        require(stringr)
+        
+        #compute number of SNPs
+        n_SNPs <- nrow(sum_stats)
+        
+        #compute the number of unique rsIDs 
+        sum_stats_rsIDs<- sum_stats[grep('rs',sum_stats$SNP),]
+        n_rsIDs <- length(unique(sum_stats_rsIDs$SNP))
+        
+        SNP_per_chr <- vector(mode='integer', length = 22)
+        rsID_per_chr <-  vector(mode='integer', length = 22)
+        dupl_per_chr <- vector(mode='integer', length = 22)
+        
+        #compute the number of unique rsIDs and SNPs per chromosome 
+        for(i in c(1:22)){
+          
+              SNP_per_chr[i] <- nrow(sum_stats[sum_stats$CHR== i ,]) 
+              rsID_per_chr[i] <- sum(str_starts(sum_stats[sum_stats$CHR== i,]$SNP, 'rs'))
+              
+              #compute the duplicated rows and SNP
+              dupl_per_chr[i] <- length(unique(sum_stats[sum_stats$CHR== i ,]$SNP[duplicated(sum_stats[sum_stats$CHR== i ,]$SNP)]))
+              
+          
+        }
+        
+        qc_metrics_SNPs <- cbind(Chromosome = c(1:22) ,n_SNPs = SNP_per_chr, no_rsID= c(SNP_per_chr - rsID_per_chr))
+        dupl_per_chr <- cbind(Chromosome = c(1:22) ,n_SNPs =  dupl_per_chr )
+        
+        
+        #print info
+        cat(paste0( 'Total number of SNP  ' , n_SNPs , '\n', 
+                    'Total number of SNP with rsID  ', n_rsIDs, '\n',
+                    'There are ',sum(dupl_per_chr), ' duplicated SNPs', '\n' )
+        )
+        
+        
+        #issue warning for rsIDs
+        if(sum(qc_metrics_SNPs[,3])!=0){ warning('There are SNPs without rsIDs in chr1:22')}
+        
+        #warninng for chr Y and X
+        if(length(unique(sum_stats$CHR))>22){warning('There are more than 22 Chromosomes')}
+        
+        #check if all chromosomes are there
+        if(mean(1:22 %in% unique(sum_stats$CHR))!=1) {
+          
+            warning ('Some chromosomes are missing')
+          
+           } else {
+          
+            cat(paste0( 'All 22 chromosomes are present', '\n'))
+          
+        }
+        
+        #plot number of SNP per chr
+        if(plots==T){
+          
+              require(tidyr)
+              require(ggplot2)
+              
+              plot <- ggplot(pivot_longer(as.data.frame(qc_metrics_SNPs),cols = c(n_SNPs, no_rsID)), aes(x=Chromosome, y=value, fill=name)) + 
+                geom_bar(position="stack", stat="identity" )+scale_fill_manual(values = c("grey80", "red")) +
+                geom_text(aes(label=value),position= position_stack(vjust = 0.5, reverse=F), size=1.5)+
+                labs(y = 'Number of SNP', x = 'Chromosome')+
+                theme(legend.position = "top", panel.background = element_blank(), axis.line = element_line(colour = "black")) +
+               ggtitle('Number of rsID and SNP without rsID for chr1:22')
+          
+              print(plot)
+        }
+        
+        
+      }#end of qc
+        
+        
+          #remove chr X Y and MT, keep only 1:22
+          if(remove_X_Y_MT==T){
+            
+                aa <- sum_stats
+                sum_stats <- sum_stats[sum_stats$CHR %in% c(1:22),]
+                
+                
+          }#end remove chr
+        
+        
+          #save the file if a path is provided
+          if(is.na(path)){
+                invisible(sum_stats)
+            
+          } else {
+            
+                fwrite(sum_stats, path, sep = '\t', col.names = T, row.names = F, quote = F)
+                if(remove_X_Y_MT==T){ cat(paste0('The number of SNP in the remove chr Y X and MT is ', nrow(aa)-nrow(sum_stats))) }
+                invisible(sum_stats)
+                
+          }
+        
+         
+  }
+  
+}
+
+```
+
+
+## Prepare traits
+
+### Prepare and munge cell counts
+```{r}
+a1 <- fread('Summary_Stats/vuckovic-2020_lymphocytecount_build37_GCST90002388_buildGRCh37.tsv')
+b1 <- fread('Summary_Stats/vuckovic-2020_eosinophilcounts_build37_GCST90002381_buildGRCh37.tsv')
+c1 <- fread('Summary_Stats/vuckovic-2020_monocytecount_build37_GCST90002393_buildGRCh37.tsv')
+
+
+for(i in 1:3) {
+  prepare_munge(list(a1,b1,c1)[[i]],
+                rsID = 'variant_id',
+                the_effect_allele = 'effect_allele',
+                the_non_effect_allele = 'other_allele',
+                the_Beta = 'beta',
+                pvalue = 'p_value',
+                the_SE = 'standard_error',
+                the_chr = 'CHR_num',
+                the_bp = 'base_pair_location',
+                the_MAF = 'effect_allele_frequency', 
+                to_remove = c('VARIANT', 'GENPOS', 'MLOG10P', 'ALT_MINOR', 'MA_FREQ', 'R2', 'GWSIG'),
+                path = paste0('outputs/rev_1/08_genetic_corr_traits/ready_for_munge/', c('lymphocyte','eosinophil', 'monocyte')[i], '_counts.build37.txt'),
+                qc=F, 
+                remove_X_Y_MT = F)
+}
+
+
+
+files = c('outputs/rev_1/08_genetic_corr_traits/ready_for_munge/lymphocyte_counts.build37.txt',
+          'outputs/rev_1/08_genetic_corr_traits/ready_for_munge/monocyte_counts.build37.txt',
+          'outputs/rev_1/08_genetic_corr_traits/ready_for_munge/eosinophil_counts.build37.txt'
+)
+
+
+munge(files = files,
+      hm3 = 'SNP/w_hm3.snplist',
+      N=c(408112,408112,408112),
+      trait.names = c('lymphocyte_count', 'monocyte_counts', 'eosinophil_counts'),
+      parallel = T,
+      cores = 2)
+
+system('mv *.sumstats.gz *.log ./outputs/rev_1/08_genetic_corr_traits')
+
+```
+
+### Prepare and munge factors
+
+```{r}
+
+files = c('outputs/rev_1/03_gwas_estimation/summarystats_f1_.txt',
+          'outputs/rev_1/03_gwas_estimation/summarystats_f2_.txt',
+          'outputs/rev_1/03_gwas_estimation/summarystats_f3_.txt'
+)
+
+
+munge(files = files,
+      hm3 = 'SNP/w_hm3.snplist',
+      N=c(2653, 3478, 13037),
+      trait.names = c('f1', 'f2', 'f3'),
+      parallel = T,
+      cores = 2)
+
+system(' mv *.sumstats.gz *.log ./outputs/rev_1/08_genetic_corr_traits')
+
+
+```
+
+## LD score regression
+
+Run ldscore regression
+```{r paged.print=TRUE}
+
+munged_files <- c('outputs/rev_1/08_genetic_corr_traits/f1.sumstats.gz',
+                  'outputs/rev_1/08_genetic_corr_traits/f2.sumstats.gz',
+                  'outputs/rev_1/08_genetic_corr_traits/f3.sumstats.gz',
+                  
+                  'outputs/rev_1/08_genetic_corr_traits/eosinophil_counts.sumstats.gz',
+                  'outputs/rev_1/08_genetic_corr_traits/monocyte_counts.sumstats.gz',
+                  'outputs/rev_1/08_genetic_corr_traits/lymphocyte_count.sumstats.gz')
+
+
+ldsc_output <- ldsc(traits = munged_files, 
+                    sample.prev = c(NA,NA, NA, NA,NA,NA),    
+                    population.prev = c(NA,NA,NA,NA, NA, NA), 
+                    trait.names = c('f1','f2', 'f3', 'eosinophil','monocyte', 'lymphocyte'),
+                    ld = "ldscores/eur_w_ld_chr",
+                    wld= "ldscores/eur_w_ld_chr", stand = T)
+
+system(' mv *ldsc.log ./outputs/rev_1/08_genetic_corr_traits ')
+```
+
+### Plot the correlations
+
+```{r}
+
+#plot cell couts
+rownames(ldsc_output$S_Stand) <- colnames(ldsc_output$S_Stand)
+tp <- ldsc_output$S_Stand[c('f1', 'f2', 'f3',  'lymphocyte','monocyte','eosinophil'), c('f1', 'f2', 'f3',   'lymphocyte','monocyte','eosinophil') ]
+
+library(ggplot2)
+library(ggpubr)
+library(RColorBrewer)
+
+
+
+a1 <- tp[c(1,2,3),c(4,5,6)]
+a2 <- tp[c(1,2,3),c(4,5,6)]
+a3 <- tp[c(1,2,3),c(4,5,6)]
+
+a1 <- as.data.frame(a1)
+a2 <- as.data.frame(a2)
+a3 <- as.data.frame(a3)
+
+a1[,4] <- rownames(a1)
+a2[,4] <- rownames(a2)
+a3[,4] <- rownames(a3)
+
+brewer.pal(6,'Paired')[c(2,4,6)]
+
+
+
+lympho <- ggplot(a1, aes(x=V4, y=lymphocyte ,fill=V4))+ geom_bar(stat='identity', width=0.5) +ylim(-0.1,+0.4)+geom_hline(yintercept=0,  color = "grey")+scale_fill_manual(values=brewer.pal(6,'Paired')[c(2,4,6)])+theme_classic()
+mono <- ggplot(a1, aes(x=V4, y=monocyte, fill=V4))+ geom_bar(stat='identity', width=0.5) +ylim(-0.1,+0.4)+geom_hline(yintercept=0, color = "grey")+scale_fill_manual(values=brewer.pal(6,'Paired')[c(2,4,6)])+theme_classic()
+eos <- ggplot(a1, aes(x=V4, y=eosinophil, fill=V4))+ geom_bar(stat='identity', width=0.5)  +ylim(-0.1,+0.4)+geom_hline(yintercept=0, color = "grey")+theme_classic()+ scale_fill_manual(values=brewer.pal(6,'Paired')[c(2,4,6)])+theme_classic()
+
+
+
+pdf('outputs/rev_1/08_genetic_corr_traits/barplot_cell_counts.pdf', height = 6, width = 15)
+ggarrange(eos, mono, lympho, ncol = 3, nrow = 1, labels = c('eosinophil eunts', 'monocyte counts', 'lymphocyte counts'))
+dev.off()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

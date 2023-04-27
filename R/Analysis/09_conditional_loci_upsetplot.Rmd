@@ -1,0 +1,54 @@
+---
+title: "09 Conditional loci upset"
+output: 
+  html_document: 
+    toc: yes
+author: 'Pietro Demela'
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+knitr::opts_knit$set(root.dir =  "/project/aid_sharing/AID_sharing") #set up the project directory
+```
+
+## Libraries
+
+```{r libraries, message=TRUE, warning=TRUE, paged.print=TRUE}
+library(data.table)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(qgraph)
+```
+
+## Load and prepare the dataset 
+
+```{r paged.print=FALSE}
+loci.table <- fread('outputs/rev_1/coloc_eqtl_mr/loci_definitions/final_locus_table.tsv', data.table = F) #take the original factor loci list
+loci.table$final.locus=paste0(loci.table$Chr,":",loci.table$start,"-",loci.table$end,"_",loci.table$sub_locus)
+```
+
+### Plot the Upset plot
+```{r}
+q <- make_comb_mat(list(f1=loci.table[which(loci.table$trait=='f1'),]$final.locus, f2=loci.table[which(loci.table$trait=='f2'),]$final.locus, f3=loci.table[which(loci.table$trait=='f3'),]$final.locus), mode = 'distinct')
+
+
+UpSet(q, set_order = c("f1", "f2", "f3"), 
+      comb_order = c(5,6,7,2,3,4,1),
+      comb_col = c(brewer.pal(8, 'Set2')[c(7,6,6,6)],brewer.pal(12, 'Paired')[c(2,4,6)]),
+      top_annotation = upset_top_annotation(q, add_numbers = TRUE, height = unit(6, "cm")),
+      right_annotation = upset_right_annotation(q, add_numbers = TRUE, width = unit(5,'cm'),gp = gpar(fill = brewer.pal(5, 'Greys')[1])  ),
+      row_title = "Factor", 
+      column_title = "Intersection of all loci, colocalization")
+
+```
+
+```{r}
+sessionInfo()
+```
+
